@@ -1,0 +1,840 @@
+function initMain(bz, bzFormat) {
+    var config = bzFormat.getConfig();
+    var configSetup = {
+        topOffset: 0,
+        leftOffset: 0,
+        bottomOffset: 0,
+        maxAvailableHeight: 0,
+        useCssSolution: true,
+        safeAreaPadding: 20,
+        allowSnapping: true,
+        snappingRatio: 0.15,
+        screenDoms: config.screenDOMs,
+        skipButton: config.close,
+        loadingScreen: '',
+        hudDoms: [],
+        enableSlider: true,
+        sliderColor: '#e84c3d'
+    };
+
+    var publisherAdContainer = bzFormat.getPublisherAdContainer();
+    var adContainerParent = publisherAdContainer ? publisherAdContainer.parentNode : null;
+    var adContainerGrandparent = adContainerParent ? adContainerParent.parentNode : null;
+    var topBar = null;
+    var initComplete = false;
+    var adReady = false;
+    var stopVisibilityObserver = bz.Common.noop;
+    var stopSnappingObserver = bz.Common.noop;
+    var pubWin = bzFormat.getPublisherWindow() || window;
+    console.log(pubWin.innerHeight);
+    var adContainer = pubWin.document.querySelector('#ad-container');
+    var adVisibilityObserver = null; //document.querySelector('.bz-viewability-container');
+
+    function brandstoryFormat(visibleAdContainer) {
+        var page = bz.Creative.getElementById('brandstorymain');
+        var screenHeight = adContainer.offsetHeight;
+        var currentFormatType = page.getAttribute('data-page-type-id') || '';
+        var noOfScreens = configSetup.screenDoms.length || 0;
+        var maxOffset = (noOfScreens - 1) * screenHeight;
+        var screenDoms = getScreenDOMs(configSetup.screenDoms);
+        var adTop = getAdTop();
+        var skipButton = getEl(configSetup.skipButton);
+        var enableSlider = configSetup.enableSlider;
+        var hudDoms = configSetup.hudDoms;
+        var adClipper = adContainer.firstElementChild;
+        var screenIndex = 0;
+        var lastIndex = screenIndex;
+        var scrollOffset = -1;
+        var scrollDirection = 'down';
+        var lastScrollPosition = 0;
+
+        var slider;
+
+        var visibleAdContainer = pubWin.document.createElement('div');
+        visibleAdContainer.id = 'bz-viewability';
+        visibleAdContainer.className = 'bz-viewability-container';
+        visibleAdContainer.style.height = pubWin.innerHeight;
+        // visibleAdContainer.style.display = 'none';
+        page.appendChild(visibleAdContainer); //later will be used for viewability purpose
+
+        var fullyViewedFired = false;
+        const thresholds = Array.from({ length: 10 }, (_, i) => (i + 1) / 10);
+        const adElement = document.querySelector('.bz-viewability-container');
+        const options = {
+            root: null,
+            rootMargin: -configSetup.topOffset + 'px 0px ' + -configSetup.bottomOffset + 'px 0px',
+            threshold: thresholds
+        };
+        if (!window.IntersectionObserver) {
+            pubWin.addEventListener('scroll', debouncedOnScroll);
+            return;
+        }
+
+        const timeInViewMap = new Map();
+
+        adVisibilityObserver = new IntersectionObserver(function (entries, observerCb) {
+            entries.forEach((entry) => {
+                if (entry.isIntersecting) {
+                    console.log(`Container is ${entry.intersectionRatio * 100}% visible!`);
+                   // console.log(entry.intersectionRatio,'entryintersect')
+                    if (!timeInViewMap.has(entry.target) && entry.intersectionRatio > 0.5) {
+                        const timeInView = new TimeInView(thresholds[0]);
+                        timeInView.start();
+                        timeInView.checkVisibility(entry.intersectionRatio);
+                        timeInViewMap.set(entry.target, timeInView);
+                        // console.log("if part fired")
+                    } else {
+                        const timeInView = timeInViewMap.get(entry.target);
+                        timeInView.checkVisibility(entry.intersectionRatio);
+                       // console.log("else part fired")
+                        fullyViewedFired = true;
+                    }
+                } else {
+                    console.log('container is not visible.');
+                    if (timeInViewMap.has(entry.target) && entry.intersectionRatio < 0.5) {
+                        const timeInView = timeInViewMap.get(entry.target);
+                        timeInView.pause();
+                        timeInViewMap.delete(entry.target);
+                        fullyViewedFired = true;
+                        if (fullyViewedFired) {
+                            adVisibilityObserver.unobserve(adElement);
+                            console.log("unobserving");
+                            return bz.Common.noop;
+                        }
+                    }
+                }
+            });
+        }, options);
+        adVisibilityObserver.observe(adElement);
+
+       
+
+
+
+        function isMPreview() {
+            return window.top.location.href.indexOf('mpreview') >= 0;
+        }
+
+        function getAdTop() {
+            var top = adContainer.offsetTop;
+            var parent = adContainer.offsetParent;
+
+            while (parent !== pubWin.document.body) {
+                top += parent.offsetTop;
+                parent = parent.offsetParent;
+            }
+
+            return top;
+        }
+
+        function resizeDoms() {
+            adTop = getAdTop();
+            screenHeight = page.offsetHeight;
+            maxOffset = (noOfScreens - 1) * screenHeight;
+            if (currentFormatType === 'brandstory') adjustContainerHeight();
+            screenDoms.forEach(function (div) {
+                div.style.overflow = 'hidden';
+                [].slice.call(div.childNodes).forEach(function (child) {
+                    child.style.height = screenHeight + 'px';
+                });
+            });
+        }
+
+        function adjustContainerHeight() {
+            var offset =
+                bzFormat.isPreview() && !isMPreview()
+                    ? window.innerHeight - page.offsetHeight
+                    : window.top.innerHeight - page.offsetHeight;
+            adContainer.style.minHeight = noOfScreens * screenHeight + offset + 'px';
+            adClipper.style.minHeight = noOfScreens * screenHeight + offset + 'px';
+        }
+
+        function orientationChanged() {
+            resized().then(resizeDoms);
+        }
+        function createDiv() {
+            var bz_div = document.createElement('div');
+            bz.Common.css(
+                {
+                    left: '0%',
+                    margin: '0px',
+                    opacity: 1,
+                    padding: '0px',
+                    position: 'absolute',
+                    top: '0%',
+                    width: '100%'
+                },
+                bz_div
+            );
+            return bz_div;
+        }
+
+        var style = document.createElement('style');
+        style.type = 'text/css';
+        style.innerHTML =
+            '.bz-screen { will-change: transform; -webkit-box-shadow: 0px 10px 15px 3px rgba(0,0,0,0.25); overflow: hidden; -moz-box-shadow: 0px 10px 15px 3px rgba(0,0,0,0.25); box-shadow: 0px 10px 15px 3px rgba(0,0,0,0.25);}.bz-slider {top: 0px; right: 0px; position: absolute; transform-origin: top; width: 6px; height: 100%; background-color: rgba(0,0,0,1); z-index: 999;';
+        (' ; position: absolute; right: 0px; transform: scaleY(0); -webkit-transform: scaleY(0); transform-origin: top; pointer-events: none; will-change: transform;}'); // .concat()
+        // style.innerHTML =
+        //     '.bz-screen { will-change: transform; -webkit-box-shadow: 0px 10px 15px 3px rgba(0,0,0,0.25); -moz-box-shadow: 0px 10px 15px 3px rgba(0,0,0,0.25); box-shadow: 0px 10px 15px 3px rgba(0,0,0,0.25);}.bz-slider { width: 6px; height: 100%; background-color: '.concat(
+        //         config.sliderColor,
+        //         '; position: absolute; right: 0px; transform: scaleY(0); -webkit-transform: scaleY(0); transform-origin: top; pointer-events: none; will-change: transform; z-index: 999;}'
+        //     );
+        page.appendChild(style);
+        createFixedLayout();
+        createSlider();
+        createSkipBtn();
+        resizeDoms(); //match css
+        addPreviewHack();
+        pubWin.addEventListener('resize', resizeDoms);
+        pubWin.addEventListener('orientationchange', orientationChanged);
+        pubWin.addEventListener('scroll', bz.Common.debounce(adOnScroll));
+
+        function createSkipBtn() {
+            if (!skipButton) {
+                console.log('RETURNED');
+                return;
+            }
+            skipButton.addEventListener('click', skipAd);
+            bz.Common.css(
+                {
+                    zIndex: 999,
+                    'will-change': 'transform'
+                },
+                skipButton
+            );
+        }
+
+        function createFixedLayout() {
+            var layerindex = noOfScreens + 1;
+            hudDoms.forEach(function (elname) {
+                var el = getEl(elname);
+                if (!el) return;
+                bz.Common.css(
+                    {
+                        zIndex: layerindex++,
+                        'will-change': 'transform'
+                    },
+                    el
+                );
+            });
+        }
+        function createSlider() {
+            if (!enableSlider) return;
+            slider = document.createElement('div');
+            slider.id = 'slider';
+            slider.classList.add('bz-slider');
+            page.appendChild(slider);
+            return slider;
+        }
+        function adOnScroll(e) {
+            scrollOffset = pubWin.scrollY - adTop;
+            if (pubWin.scrollY > lastScrollPosition) {
+                scrollDirection = 'down';
+            } else {
+                scrollDirection = 'up';
+            }
+            lastScrollPosition = pubWin.scrollY;
+            screenIndex = Math.min(Math.floor(scrollOffset / screenHeight), noOfScreens - 2);
+            if (screenIndex < 0) return;
+            if (lastIndex !== screenIndex) {
+                bz.Common.css(
+                    {
+                        visibility: 'visible'
+                    },
+                    screenDoms[screenIndex]
+                );
+                var style = null;
+
+                if (lastIndex < screenIndex) {
+                    scrollDirection = 'down';
+                    style = {
+                        visibility: 'hidden',
+                        height: '0px'
+                    };
+                } else {
+                    scrollDirection = 'up';
+                    style = {
+                        visibility: 'visible',
+                        height: screenHeight + 'px'
+                    };
+                }
+
+                bz.Common.css(style, screenDoms[lastIndex]);
+                lastIndex = screenIndex;
+            }
+
+            var height = screenHeight - (scrollOffset - screenIndex * screenHeight);
+            if (height < 20) {
+                height = 0;
+            }
+
+            bz.Common.css(
+                {
+                    height: height + 'px'
+                },
+                screenDoms[screenIndex]
+            );
+            animateSlider((scrollOffset / maxOffset).toFixed(3));
+            // element.style.display = "block";
+            adElement.style.backgroundColor = 'red';
+        }
+
+        function skipAd() {
+            var offset =
+                scrollDirection === 'down'
+                    ? adTop + adContainer.offsetHeight
+                    : adTop - screenHeight;
+
+            switch (scrollDirection) {
+                case 'up':
+                    screenIndex = 0;
+                    screenDoms.slice(0, -1).forEach(function (screen) {
+                        screen.style.height = screenHeight + 'px';
+                    });
+                    break;
+
+                case 'down':
+                    screenIndex = noOfScreens - 2;
+                    screenDoms.slice(0, -1).forEach(function (screen) {
+                        screen.style.height = '0px';
+                    });
+                    break;
+
+                default:
+                    break;
+            }
+
+            pubWin.scrollTo(0, offset); //reset slider to either 0 or 1 scale depeding upon direction
+
+            animateSlider(Math.min(1, screenIndex));
+            screenDoms.forEach(function (screen) {
+                screen.style.visibility = 'visible';
+            });
+        }
+
+        function animateScale(el, val) {
+            bz.Common.css(
+                {
+                    transform: 'scaleY('.concat(val, ')')
+                },
+                el
+            );
+        }
+        function animateSlider(val) {
+            if (enableSlider) animateScale(slider, val);
+        }
+
+        function getEl(name) {
+            try {
+                return bz.Creative.getElementByName(name).el;
+            } catch (e) {
+                console.error('Element not found');
+            }
+
+            return null;
+        }
+        function getScreenDOMs(screenDomConfig) {
+            return screenDomConfig.map(function (screenElements, index) {
+                return makeScreen(screenElements, index);
+            });
+        }
+
+        function makeScreen(screenElement, index) {
+            var screenContainer = createDiv();
+            screenContainer.id = 'bz-screen-' + index;
+            screenContainer.classList.add('bz-screen');
+            screenContainer.style.height = '100%';
+            screenContainer.style.zIndex = ''.concat(noOfScreens - index);
+            var screenClipper = createDiv();
+            screenClipper.id = 'bz-screenClipper-' + index;
+            screenClipper.style.height = screenHeight + 'px';
+            var el = getEl(screenElement);
+            if (!el) return;
+            bz.Creative.moveElementById(el.id, screenClipper);
+            screenContainer.appendChild(screenClipper);
+            page.appendChild(screenContainer);
+            return screenContainer;
+        }
+
+        function resized() {
+            var timeout = 120;
+            return new window.Promise(function (resolve) {
+                var go = function go(i, height0, width0) {
+                    (pubWin.innerHeight !== height0 && pubWin.innerWidth !== width0) || i >= timeout
+                        ? resolve()
+                        : window.requestAnimationFrame(function () {
+                              go(i + 1, height0, width0);
+                          });
+                };
+
+                go(0, pubWin.innerHeight, pubWin.innerWidth);
+            });
+        }
+
+        function addPreviewHack() {
+            if (
+                bzFormat.isPreview &&
+                typeof bzFormat.isPreview === 'function' &&
+                bzFormat.isPreview()
+            ) {
+                var adCell = pubWin.document.querySelector('.cell__adContainer');
+                if (adCell) adCell.style.height = 'auto';
+            }
+        }
+
+        var Timer = (function () {
+            function Timer(name) {
+                this.name = name;
+                this.elapsed = 0;
+                this.startTime = null;
+                this.state = Timer.states.INITIALIZED;
+                // this._timerId = null;
+            }
+
+            Timer.states = {
+                INITIALIZED: 'initialized',
+                RUNNING: 'running',
+                PAUSED: 'paused',
+                STOPPED: 'stopped'
+            };
+
+            /*Timer.prototype._startTick = function () {
+               var timer = this;
+       
+               (function tick() {
+                  timer.elapsed = new Date() - timer.startTime;
+       
+                    if (timer.state === Timer.states.RUNNING) {
+                       timer._timerId = setTimeout(tick, 500);
+                    }
+                }());
+       
+            };
+       
+            Timer.prototype._stopTick = function () {
+                clearTimeout(this._timerId);
+            };*/
+
+            Timer.prototype.start = function () {
+                if (this.state === Timer.states.INITIALIZED || this.state === Timer.states.PAUSED) {
+                    this.startTime = new Date();
+                    this.state = Timer.states.RUNNING;
+                    //this._startTick();
+                }
+            };
+
+            Timer.prototype.isRunning = function () {
+                return this.state === Timer.states.RUNNING;
+            };
+
+            Timer.prototype.reset = function () {
+                this.startTime = null;
+                this.elapsed = 0;
+                this.state = Timer.states.INITIALIZED;
+            };
+
+            Timer.prototype.pause = function () {
+                if (this.state === Timer.states.RUNNING) {
+                    this.elapsed += new Date() - this.startTime;
+                    this.state = Timer.states.PAUSED;
+                    //this._stopTick();
+                }
+
+                return this.elapsed;
+            };
+
+            Timer.prototype.resume = function () {
+                if (this.state === Timer.states.PAUSED) {
+                    this.startTime = new Date();
+                    this.state = Timer.states.RUNNING;
+                    //this._startTick();
+                }
+            };
+
+            Timer.prototype.stop = function () {
+                if (this.state !== Timer.states.STOPPED) {
+                    this.elapsed += new Date() - this.startTime;
+                    this.startTime = null;
+
+                    this.state = Timer.states.STOPPED;
+                    //this._stopTick();
+                }
+
+                return this.elapsed;
+            };
+
+            Timer.prototype.getElapsed = function () {
+                return (
+                    this.elapsed +
+                    (this.state === Timer.states.RUNNING ? new Date() - this.startTime : 0)
+                );
+            };
+
+            return Timer;
+        })();
+
+        var TimeInView = (function () {
+            function TimeInView(viewThreshold) {
+                this.threshold = [
+                    100, 200, 500, 1000, 1700, 3400, 5100, 6800, 9800, 11300, 13200, 15000
+                ];
+                this.timer = new Timer();
+                this.isRunning = false;
+                this.viewThreshold = viewThreshold;
+                this.boundFiredTrackerOnThreshold = this.firedTrackerOnThreshold.bind(this);
+            }
+
+            TimeInView.prototype.firedTrackerOnThreshold = function () {
+                if (this.timer.getElapsed() >= this.threshold[0]) {
+                    bz.Creative.triggerAnalyticsEvent(
+                        't-' + this.threshold[0],
+
+                        't-' + this.threshold[0],
+                        bz.Constants.EventType.AUTO
+                    );
+                    this.threshold = this.threshold.slice(1);
+                }
+                if (this.threshold.length) {
+                    setTimeout(this.boundFiredTrackerOnThreshold, 70);
+                } else {
+                    this.timer.pause();
+                }
+            };
+
+            TimeInView.prototype.start = function () {
+                if (!this.isRunning) {
+                    this.timer.start();
+                    this.boundFiredTrackerOnThreshold();
+                    this.isRunning = true;
+                }
+            };
+            TimeInView.prototype.pause = function () {
+                if (this.timer.isRunning()) {
+                    this.timer.pause();
+                    this.isRunning = false;
+                }
+            };
+            TimeInView.prototype.checkVisibility = function (intersectionRatio) {
+                if (intersectionRatio > this.viewThreshold) {
+                    this.start();
+                } else {
+                    this.pause();
+                }
+            };
+            return TimeInView;
+        })();
+    }
+
+    // make the screen and other component constant and make it read in DOM and continue on sliding part
+    function applyPositionFix(adContainerGrandparent) {
+        if (adContainerGrandparent) {
+            adContainerGrandparent.style.left = '0px';
+            adContainerGrandparent.style.marginLeft = '0px';
+            adContainerGrandparent.style.marginRight = '0px';
+            var left = adContainerGrandparent.getBoundingClientRect().left;
+            left = left * -1; //replace the sign as we want to move container in opposite side
+            adContainerGrandparent.style.left = left + 'px';
+        }
+    }
+
+    function tryCssSolution(adContainer, adContainerParent, adContainerGrandparent) {
+        var parentDom = adContainer.ownerDocument;
+        var availableWindow = parentDom.defaultView || parentDom.parentWindow;
+
+        var width = Math.min(
+            availableWindow.innerWidth,
+            availableWindow.document.documentElement.clientWidth
+        );
+        configSetup.maxAvailableHeight = Math.max(
+            bz.Common.innerHeight(availableWindow),
+            configSetup.maxAvailableHeight
+        );
+
+        var canUseCssSolution =
+            configSetup.useCssSolution &&
+            adContainer &&
+            adContainerParent &&
+            adContainerGrandparent;
+
+        if (!canUseCssSolution) return false;
+        //Condition to use clip in safari versions less than 15
+        //(bz.Common.Device.browser.safari && bz.Common.isVersionLessThan("15", bz.Common.Device.version))
+        var useClipPath = !(
+            bz.Common.Device.browser.firefox ||
+            (bz.Common.Device.os.ios && bz.Common.Device.browser.chrome) ||
+            (bz.Common.Device.os.ios && bz.Common.Device.browser.safari)
+        );
+
+        var useClip = bz.Common.Device.browser.samsung || !useClipPath;
+
+        bz.Common.css(
+            {
+                position: 'fixed',
+                top: 'auto', //configSetup.topOffset + "px",
+                bottom: configSetup.bottomOffset + 'px',
+                left: configSetup.leftOffset + 'px',
+                width: '100%',
+                display: 'block',
+                height:
+                    configSetup.maxAvailableHeight -
+                    configSetup.topOffset -
+                    configSetup.bottomOffset +
+                    'px',
+                overflow: 'visible',
+                // Safari has problems rendering fixed elements inside iframe.
+                // Without this, scrollex will not render on Safari, when
+                // rendered inside iframe.
+                '-webkit-transform': 'translateZ(0)',
+                transform: 'translateZ(0)'
+            },
+            adContainer
+        );
+
+        bz.Common.css(
+            bz.Common.assign(
+                {
+                    position: 'absolute',
+                    top: '0',
+                    left: '0',
+                    width: '100%',
+                    display: 'block',
+                    height:
+                        configSetup.maxAvailableHeight -
+                        configSetup.topOffset -
+                        configSetup.bottomOffset +
+                        'px',
+                    overflow: 'hidden',
+                    boxSizing: 'border-box'
+                },
+                useClip ? { clip: 'rect(0px auto auto 0px)' } : {},
+                useClipPath
+                    ? {
+                          '-webkit-clip-path': 'inset(0 0 0 0)',
+                          'clip-path': 'inset(0 0 0 0)'
+                      }
+                    : {}
+            ),
+            adContainerParent
+        );
+
+        bz.Common.css(
+            {
+                position: 'relative',
+                top: '0',
+                left: '0',
+                width: width + 'px',
+                height:
+                    configSetup.maxAvailableHeight -
+                    configSetup.topOffset -
+                    configSetup.bottomOffset +
+                    'px',
+                padding: '0',
+                display: 'block'
+            },
+            adContainerGrandparent
+        );
+        applyPositionFix(adContainerGrandparent);
+        return true;
+    }
+
+    function updateStructure(adCon, adConParent, adConGrandparent, availableWindow) {
+        configSetup.maxAvailableHeight = Math.max(
+            bz.Common.innerHeight(availableWindow),
+            configSetup.maxAvailableHeight
+        );
+        var height =
+            configSetup.maxAvailableHeight - configSetup.topOffset - configSetup.bottomOffset;
+        var width = Math.min(
+            availableWindow.innerWidth,
+            availableWindow.document.documentElement.clientWidth
+        );
+        bzFormat.setPageTypeSlot({ width: width, height: height }, 'brandstory');
+
+        bz.Common.css(
+            {
+                height: height + 'px',
+                bottom: configSetup.bottomOffset + 'px'
+            },
+            adCon
+        );
+
+        bz.Common.css(
+            {
+                height: height + 'px'
+            },
+            adConParent
+        );
+
+        bz.Common.css(
+            {
+                width: width + 'px',
+                height: height + 'px'
+            },
+            adConGrandparent
+        );
+
+        applyPositionFix(adConGrandparent);
+    }
+    function adjustBars(adContainerParent, topBar, bottomBar) {
+        var barStyles = {
+            position: 'absolute',
+            width: '100%'
+        };
+        bz.Creative.moveElementById(topBar.id, adContainerParent);
+        bz.Creative.moveElementById(bottomBar.id, adContainerParent);
+
+        bz.Common.css(
+            bz.Common.assign({}, barStyles, {
+                top: '0',
+                'box-shadow': '#000 0px 1px 10px'
+            }),
+            topBar.el
+        );
+
+        bz.Common.css(
+            bz.Common.assign({}, barStyles, {
+                bottom: '0',
+                'box-shadow': '#000 0px -1px 10px'
+            }),
+            bottomBar.el
+        );
+    }
+
+    var watchForSnapping = function (adContainerParent, adContainer, onPageUnload) {
+        var isSnappingEnabled =
+            bz.Creative.getTagSetting(false, 'disableBrandstorySnapping') ||
+            configSetup.allowSnapping;
+
+        if (!isSnappingEnabled) return;
+        var pubWin = bzFormat.getPublisherWindow();
+        var pubDoc = bzFormat.getPublisherDocument();
+        var snappingDistance = configSetup.snappingRatio * configSetup.maxAvailableHeight;
+        function getAdContainerTop() {
+            return adContainerParent.getBoundingClientRect().top - configSetup.topOffset;
+        }
+
+        function snap() {
+            var lastTop = getAdContainerTop();
+            setTimeout(function () {
+                var t = getAdContainerTop();
+                if (
+                    adContainerParent.getBoundingClientRect().top === 0 &&
+                    t === lastTop &&
+                    !pubDoc.getElementById(adContainer.id)
+                ) {
+                    onPageUnload();
+                }
+                if (t === lastTop && t > -1 * snappingDistance && t < snappingDistance) {
+                    var top =
+                        adContainerParent.getBoundingClientRect().top +
+                        (pubWin.pageYOffset || pubDoc.documentElement.scrollTop) -
+                        configSetup.topOffset;
+                    var from = getAdContainerTop();
+                    var direction = from > 0 ? 1 : -1;
+                    (function animateScroll(t, x) {
+                        if (
+                            (direction > 0 && from - x < 0.001) ||
+                            (direction < 0 && from - x > 0.001) ||
+                            bz.Common.Device.os.android
+                        ) {
+                            pubWin.scrollTo(0, top);
+                            return;
+                        }
+                        pubWin.scrollTo(0, top - (from - x));
+                        setTimeout(function () {
+                            requestAnimationFrame(function () {
+                                animateScroll(t, x + direction * 5);
+                            });
+                        }, 0);
+                    })(top, 0);
+                }
+            }, 800);
+        }
+
+        var debouncedSnap = bz.Common.debounce(snap, 10);
+
+        pubWin.addEventListener('scroll', debouncedSnap);
+        return function () {
+            pubWin.removeEventListener('scroll', debouncedSnap);
+        };
+    };
+
+    function init(visibleAdContainer) {
+        var api = {
+            updateStructure: function () {
+                updateStructure(
+                    publisherAdContainer,
+                    adContainerParent,
+                    adContainerGrandparent,
+                    pubWin
+                );
+            }
+        };
+
+        function cleanUp() {
+            stopVisibilityObserver();
+            stopSnappingObserver();
+        }
+
+        var cssSolutionWorked = tryCssSolution(
+            publisherAdContainer,
+            adContainerParent,
+            adContainerGrandparent
+        );
+
+        bzFormat.onPageReady('brandstorymain', function (pageId) {
+            api.updateStructure();
+            topBar = bz.Creative.getElementRelatedTo('topmsgcont');
+            var bottomBar = bz.Creative.getElementRelatedTo('botmsgcont');
+
+            adjustBars(adContainerParent, topBar, bottomBar);
+            brandstoryFormat();
+            //  watchVisibility(visibleAdContainer);
+
+            var adElements = bz.Creative.querySelectorAll('.bz-el');
+            Array.prototype.slice.call(adElements).map(function (el) {
+                el.style['will-change'] = 'transform';
+            });
+        });
+
+        bzFormat.onPageLoad('*', function (pageId) {
+            stopSnappingObserver = watchForSnapping(
+                adContainerParent,
+                publisherAdContainer,
+                cleanUp
+            );
+        });
+
+        bzFormat.onPageUnload('*', function () {
+            cleanUp();
+        });
+        return api;
+    }
+    var api;
+    var showInitialPage = function () {
+        if (initComplete && adReady) {
+            api = init();
+            bzFormat.gotoPage('brandstorymain', '', '');
+        }
+    };
+    bzFormat.onSDKStateChange('ready', function () {
+        adReady = true;
+        showInitialPage();
+    });
+
+    var pubHackFilePath = bzFormat.getPublisherHackFile();
+    if (pubHackFilePath !== '') {
+        bz.Common.loadScripts([pubHackFilePath])
+            .then(function () {
+                initComplete = true;
+                showInitialPage();
+            })
+            .catch(function () {
+                initComplete = true;
+                showInitialPage();
+            });
+    } else {
+        initComplete = true;
+        showInitialPage();
+    }
+}
